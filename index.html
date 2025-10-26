@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="css/style.css">
+    <meta charset="UTF-8" />
+    <title>Autism Prevalence — Honest Trends & Context</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        :root{
+            --bg:#0f172a; --panel:#1e293b; --ink:#e2e8f0; --muted:#94a3b8; --grid:#334155;
+            --us:#8b5cf6; --usHL:#f59e0b; --bar:#64748b; --tooltip:#0b1220;
+        }
+        *{box-sizing:border-box}
+        body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+        .wrap{max-width:1180px;margin:0 auto;padding:20px}
+        h1{margin:4px 0 8px;font-size:28px}
+        p.dek{color:var(--muted);margin:0 0 18px}
+        .card{background:var(--panel);border:1px solid #0b1020;border-radius:12px;padding:14px 16px;margin:0 0 18px;box-shadow:0 12px 34px rgba(0,0,0,.35)}
+        .card h2{margin:2px 0 10px;font-size:16px}
+        .axis path,.axis line{stroke:var(--grid)}
+        .axis text{fill:#cbd5e1;font-size:12px}
+        .legend{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 8px}
+        .radio{display:inline-flex;align-items:center;gap:8px;font-size:13px}
+        .dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+        .note{color:var(--muted);font-size:12px;margin-top:6px}
+        .tooltip{position:fixed;pointer-events:none;background:var(--tooltip);color:var(--ink);
+            border:1px solid var(--grid);padding:8px 10px;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.4);font-size:12.5px;display:none}
+        .legendRow{display:flex;align-items:center;gap:10px;margin-top:8px}
+        .grad{height:10px;border-radius:6px;overflow:hidden;border:1px solid var(--grid)}
+        svg{width:100%;height:auto}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Prevalence of Autism in the United States and Across the World</h1>
+    <p class="dek">
+        Explore the <b>prevalence</b> of autism in the United States over time (2000–2022),
+        and then see the world in 2021 and which countries rank highest.
+    </p>
+
+    <section class="card factCard">
+        <h2>About this project</h2>
+        <p>
+            This project is a redesign of a widely shared but misleading chart
+            (originally published by the White House) that exaggerated autism
+            prevalence trends with <span style="color:#f87171;font-weight:bold">alarmist colors</span>,
+            nonsensical best-fit lines, and no meaningful context.
+        </p>
+        <p>
+            Our version provides the same underlying CDC data, but presented more responsibly:
+            a proper baseline, contextual markers (such as the DSM-5 release), and comparisons
+            with other countries. The goal is not to minimize prevalence, but to <b>avoid sensationalism</b>
+            and instead provide clarity for public understanding.
+        </p>
+    </section></p>
+
+    <!-- US over time -->
+    <section class="card" id="usCard">
+        <h2>U.S. Autism Prevalence Over Time (Per 1,000 Children)</h2>
+        <div id="usControls" class="legend"></div>
+        <div id="usChart"></div>
+        <div class="note">X-axis is fixed (2000–2022) to reveal reporting gaps across data sets; Y-axis adjusts by dataset for readability. DSM-5 marked for context.</div>
+        <p class="note">
+            Notes:<br>
+            * ADDM data represent only funded sites, not entire states.<br>
+            ** ADDM estimate = total for all sites combined.<br>
+            † NSCH data not fully comparable across years due to methodology changes.<br>
+            †† NSCH suppresses estimates with wide confidence intervals.<br>
+            ††† For NSCH 2020/2022, combined multi-year estimates are shown.
+        </p>
+
+    </section>
+
+    <!-- World heatmap -->
+    <section class="card" id="mapCard">
+        <h2>World Heatmap — Autism Prevalence (Per 100,000 in 2021)</h2>
+        <div id="worldMap"></div>
+        <div class="legendRow"><span>Lower</span><div id="legendBar" class="grad" style="flex:1"></div><span>Higher</span></div>
+    </section>
+
+    <!-- Top-10 -->
+    <section class="card" id="topCard">
+        <h2>Top 10 Countries by Prevalence (Per 100,000 in 2021)</h2>
+        <div id="top10"></div>
+    </section>
+
+    <p class="note">Sources: CDC Autism Data Visualization Tool and World Population Review. </p>
+    <p class="note"> Note: Prevalence ≠ incidence; international methodologies differ so use comparisons directionally.</p>
+</div>
+<div id="tip" class="tooltip"></div>
+
+<script>
+    const US_FILE    = "data/Prevalence Estimates Over Time.csv";
+    const WORLD_FILE = "data/autism-rates-by-country-2025.csv";
+    const WORLD_TOPO = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+    const DSM_YEAR = 2013;
+
+    const SERIES_COLORS = {
+        "ADDM Network*": "#3b82f6",
+        "Medicaid": "#f59e0b",
+        "National Survey of Children's Health†": "#10b981",
+        "Special Education Child Count": "#a855f7"
+    };
+
+    const $ = s => document.querySelector(s);
+    const tip = $("#tip");
+    function showTip(html, [x,y]){ tip.innerHTML = html; tip.style.left = (x+12)+"px"; tip.style.top = (y+12)+"px"; tip.style.display="block"; }
+    function hideTip(){ tip.style.display="none"; }
+
+    function normName(s){
+        const map = {
+            "United States of America":"United States",
+            "Russian Federation":"Russia","Viet Nam":"Vietnam",
+            "Côte d’Ivoire":"Cote d'Ivoire","Côte d'Ivoire":"Cote d'Ivoire",
+            "Korea, Republic of":"South Korea","Korea, Democratic People's Republic of":"North Korea",
+            "Czechia":"Czech Republic","Eswatini":"Swaziland","Syrian Arab Republic":"Syria",
+            "Lao People's Democratic Republic":"Laos"
+        };
+        return map[s] || s;
+    }
+
+    // ---------- US OVER TIME ----------
+    function initUS(rows){
+        // Pre-aggregate: sum denominators & numerators by (year, dataset)
+        const grouped = d3.rollup(
+            rows.filter(r=>r.Year && r["Data Set"] && !isNaN(+r["Prevalence Estimates per 1,000 Children"])),
+            v => {
+                const totalDenom = d3.sum(v, d => +d.Denominator);
+                const totalCases = d3.sum(v, d => (+d.Denominator) * (+d["Prevalence Estimates per 1,000 Children"]) / 1000);
+                return totalCases / totalDenom * 1000; // prevalence per 1k
+            },
+            d => +d.Year,
+            d => d["Data Set"]
+        );
+
+        // flatten back into array
+        const data = [];
+        for (const [year, m] of grouped.entries()){
+            for (const [set,val] of m.entries()){
+                data.push({year, set, val});
+            }
+        }
+
+        // sets and controls
+        const sets = Array.from(new Set(data.map(d=>d.set)));
+        const controls = d3.select("#usControls").selectAll("label").data(sets).join("label")
+            .attr("class","radio")
+            .html(d=>`<span class="dot" style="background:${SERIES_COLORS[d]||'#9ca3af'}"></span> <input type="radio" name="ds" value="${d}"> ${d}`);
+        const defaultSet = sets.find(s=>/ADDM/i.test(s)) || sets[0];
+        d3.select(`#usControls input[value='${defaultSet}']`).attr("checked",true);
+
+        // chart
+        const container = d3.select("#usChart"); container.selectAll("*").remove();
+        const width = container.node()?.clientWidth || 1100;
+        const height = 420, margin = {top:10,right:16,bottom:42,left:54};
+        const innerW = width - margin.left - margin.right, innerH = height - margin.top - margin.bottom;
+        const svg = container.append("svg").attr("width",width).attr("height",height);
+        const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+        const allYears = d3.range(2000, 2023);
+        const x = d3.scaleBand().domain(allYears).range([0,innerW]).padding(0.12);
+        g.append("g").attr("class","axis").attr("transform",`translate(0,${innerH})`)
+            .call(d3.axisBottom(x).tickValues(allYears).tickFormat(d3.format("d")))
+            .selectAll("text").attr("transform","rotate(-45)").style("text-anchor","end");
+
+        const gy = g.append("g").attr("class","axis");
+
+        function drawDSM(){
+            const X = x(DSM_YEAR) + x.bandwidth()/2;
+            if(isFinite(X)){
+                g.append("line").attr("x1",X).attr("x2",X).attr("y1",0).attr("y2",innerH)
+                    .attr("stroke","#94a3b8").attr("stroke-dasharray","4,3");
+                g.append("text").attr("x",X+6).attr("y",12).attr("fill","#94a3b8").attr("font-size",12).text("DSM-5 (2013)");
+            }
+        }
+
+        function render(setName){
+            const rowsSet = data.filter(d=>d.set===setName);
+            const y = d3.scaleLinear().domain([0, d3.max(rowsSet,d=>d.val)||0]).nice().range([innerH,0]);
+
+            gy.transition().call(d3.axisLeft(y));
+
+            const join = g.selectAll("rect.bar").data(allYears.map(y0=>{
+                const d = rowsSet.find(r=>r.year===y0);
+                return d? d : {year:y0, val:null};
+            }), d=>d.year);
+
+            join.join(
+                enter=>enter.append("rect").attr("class","bar")
+                    .attr("x",d=>x(d.year)).attr("width",x.bandwidth())
+                    .attr("y",innerH).attr("height",0)
+                    .attr("fill",SERIES_COLORS[setName]||"#9ca3af")
+                    .on("mousemove",(ev,d)=>{ if(d.val!=null) showTip(`Year: <b>${d.year}</b><br>${d.val.toFixed(1)} per 1k`, [ev.clientX,ev.clientY]); })
+                    .on("mouseleave", hideTip)
+                    .transition().duration(500)
+                    .attr("y",d=>d.val==null?innerH:y(d.val))
+                    .attr("height",d=>d.val==null?0:(innerH - y(d.val))),
+                update=>update.transition().duration(500)
+                    .attr("y",d=>d.val==null?innerH:y(d.val))
+                    .attr("height",d=>d.val==null?0:(innerH - y(d.val)))
+                    .attr("fill",SERIES_COLORS[setName]||"#9ca3af"),
+                exit=>exit.remove()
+            );
+
+            g.selectAll(".dsm").remove();
+            drawDSM();
+
+            // Add y-axis label
+            svg.selectAll(".y-label").remove();
+            svg.append("text")
+                .attr("class","y-label")
+                .attr("x", -height/2).attr("y", 14)
+                .attr("transform","rotate(-90)")
+                .attr("text-anchor","middle")
+                .attr("fill","#cbd5e1")
+                .text("Prevalence per 1,000 children");
+        }
+
+        render(defaultSet);
+        d3.selectAll("#usControls input[name='ds']").on("change", function(){ render(this.value); });
+    }
+    // ---------- WORLD HEATMAP ----------
+    function initWorld(worldRows, topo){
+        const mapDiv = d3.select("#worldMap"); mapDiv.selectAll("*").remove();
+        const width = mapDiv.node()?.clientWidth || 1100, height = 520;
+        const svg = mapDiv.append("svg").attr("width",width).attr("height",height);
+        const g = svg.append("g");
+
+        const countries = topojson.feature(topo, topo.objects.countries).features;
+        const projection = d3.geoNaturalEarth1().fitSize([width, height], {type:"Sphere"});
+        const path = d3.geoPath(projection);
+
+        const rows = worldRows.map(r=>({ country:r.country, value:+r.AutismRate_2021 })).filter(d=>!isNaN(d.value));
+        const valueBy = new Map(rows.map(d=>[d.country, d.value]));
+        const vmax = d3.max(rows,d=>d.value)||0;
+        const color = d3.scaleSequential(d3.interpolateBlues).domain([0, vmax]); // light to dark
+
+        g.selectAll("path.country").data(countries).join("path")
+            .attr("class","country")
+            .attr("d",path)
+            .attr("fill",d=>{
+                const name = normName(d.properties.name);
+                const v = valueBy.get(name) ?? valueBy.get(d.properties.name);
+                return v!=null ? color(v) : "#2b3446";
+            })
+            .attr("stroke","#1b2434").attr("stroke-width",0.5)
+            .on("mousemove",(ev,d)=>{
+                const name = normName(d.properties.name);
+                const v = valueBy.get(name) ?? valueBy.get(d.properties.name);
+                if(v!=null) showTip(`<b>${name}</b><div style="height:1px;background:#223047;margin:6px 0"></div>${d3.format(".1f")(v)} per 100k`, [ev.clientX,ev.clientY]);
+            })
+            .on("mouseleave", hideTip);
+
+        // legend
+        const lg = d3.select("#legendBar"); lg.selectAll("*").remove();
+        const lw = lg.node()?.clientWidth || 600, lh = 10;
+        const lgSvg = lg.append("svg").attr("width",lw).attr("height",lh);
+        const defs = lgSvg.append("defs");
+        const id = "grad-"+Math.random().toString(36).slice(2);
+        const grad = defs.append("linearGradient").attr("id",id).attr("x1","0%").attr("x2","100%");
+        d3.range(0,1.0001,0.1).forEach(t=> grad.append("stop").attr("offset",(t*100)+"%").attr("stop-color", d3.interpolateBlues(t)));
+        lgSvg.append("rect").attr("width",lw).attr("height",lh).attr("fill",`url(#${id})`);
+    }
+
+    // ---------- TOP-10 ----------
+    function initTop10(worldRows){
+        const rows = worldRows.map(r=>({ country:r.country, value:+r.AutismRate_2021 })).filter(d=>!isNaN(d.value));
+        const data = rows.sort((a,b)=>b.value-a.value).slice(0,10);
+
+        const div = d3.select("#top10"); div.selectAll("*").remove();
+        const width = div.node()?.clientWidth || 1100, height = 520;
+        const margin = {top:18,right:28,bottom:42,left:180};
+        const innerW = width - margin.left - margin.right, innerH = height - margin.top - margin.bottom;
+
+        const svg = div.append("svg").attr("width",width).attr("height",height);
+        const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+        const x = d3.scaleLinear().domain([0, d3.max(data,d=>d.value)||0]).nice().range([0, innerW]);
+        const y = d3.scaleBand().domain(data.map(d=>d.country)).range([0, innerH]).padding(0.16);
+
+        g.append("g").attr("class","axis").call(d3.axisLeft(y).tickSize(0)).selectAll("text").attr("fill","#cbd5e1");
+
+        g.selectAll("rect.bar").data(data).join("rect").attr("class","bar")
+            .attr("x",0).attr("y",d=>y(d.country)).attr("height",y.bandwidth())
+            .attr("width",d=>x(d.value)).attr("fill",d=> d.country==="United States"? "#f59e0b" : "#7b8aa1");
+
+        g.selectAll("text.val").data(data).join("text").attr("class","val")
+            .attr("x",d=>x(d.value)+6).attr("y",d=>y(d.country)+y.bandwidth()/2+4)
+            .attr("fill","#cbd5e1").text(d=>d3.format(".1f")(d.value));
+
+        g.append("g").attr("class","axis").attr("transform",`translate(0,${innerH})`)
+            .call(d3.axisBottom(x).ticks(6))
+            .selectAll("text").attr("fill","#cbd5e1");
+        svg.append("text").attr("x", width/2).attr("y", height-6).attr("text-anchor","middle").attr("fill","#cbd5e1")
+            .text("Prevalence (per 100,000)");
+    }
+
+    // ---------- BOOT ----------
+    Promise.all([
+        d3.csv(US_FILE, d3.autoType),
+        d3.csv(WORLD_FILE, d3.autoType),
+        d3.json(WORLD_TOPO)
+    ]).then(([us, world, topo])=>{
+        initUS(us);
+        initWorld(world, topo);
+        initTop10(world);
+    });
+</script>
+<div class="wrap">
+<!-- FACT BLOCKS -->
+<section class="card factCard">
+    <h2>The Data Story</h2>
+    <p>
+        The goal of these visualizations is to present data on the prevalence of autism in the United States more accurately and in a less alarmist way. The first graph uses the variety of different data sources the CDC provides to show prevalence without any misleading best-fit lines or alarmist colors.
+    </p>
+    <p>
+        Yes, the general prevalence has increased, but there are many factors that go into that such as higher visibility, differing prescription requirements, and evolving diagnostic criteria. The graph clearly marks some of the context, like the release of the DSM-5.
+    </p>
+    <p>
+        The other two visualizations place U.S. autism prevalence in a global context.
+        Rates have risen in the U.S., but the country is not the outlier some claim
+        (and there would be nothing wrong if it were). This framing helps counter
+        the alarmist narrative in some graphics that suggest autism is a “crisis” or
+        that “it’s so bad here.” In reality, it’s expected and part of a broader,
+        global trend.    </p>
+</section>
+
+<section class="card factCard">
+    <h2>Autism Facts & Context</h2>
+    <ul>
+        <li>There are several ways to estimate the number of children with ASD. This estimate is referred to as prevalence, which describes the number of people with a condition in a defined group (or “population”).</li>
+        <li>About 1 in 31 children were identified with autism spectrum disorder among a 2022 sample of 8-year-olds from 16 U.S. communities in CDC's ADDM Network.</li>
+        <li>Ongoing monitoring and reporting help identify trends and changes in prevalence over time — across years, across multiple data sources, in different locations, and among demographic groups.</li>
+        <li>Reported prevalence has been higher in recent years. This may reflect changes in the clinical definition, better diagnostic efforts, and broader awareness.</li>
+        <li>Prevalence varies widely across geographic areas. This likely reflects differences in screening, identification, and reporting, rather than “environmental hotspots.”</li>
+        <li>Since 2000, prevalence has consistently been higher among boys than girls. Possible explanations include biological risk factors and differences in how symptoms present and are diagnosed.</li>
+        <li>Racial and ethnic differences have shifted: in 2020–2022, prevalence among Asian or Pacific Islander, Hispanic, and Black children surpassed White children, likely due to improved screening and access in underserved groups.</li>
+        <li>The ADDM Network also tracks early identification (age 4 vs. age 8), which helps communities assess whether children are being identified earlier over time.</li>
+    </ul>
+    <p class="note">Source: <a href="https://www.cdc.gov/autism/data-research/autism-data-visualization-tool.html" target="_blank">CDC Autism Data Visualization Tool</a></p>
+</section>
+
+<section class="card factCard">
+    <h2>About the U.S. Data Sources</h2>
+    <ul>
+        <li><b>Special Education Child Count:</b> Administrative data from the U.S. Department of Education’s IDEA Act. Children ages 3–21 receiving special education are reported annually (2000–2022).</li>
+        <li><b>NSCH (National Survey of Children's Health):</b> Annual survey on health and well-being of children ages 0–17, conducted by the Census Bureau. Parent-reported, with changes in methodology across years.</li>
+        <li><b>Medicaid:</b> Claims data analyzed by CDC from CMS datasets (2000–2022). Children ages 3–17 with at least two outpatient codes or one inpatient code for ASD were counted. Data gaps exist in 2014–15.</li>
+        <li><b>ADDM Network:</b> CDC-funded surveillance system. Collects health and education records of 8-year-olds in select sites (not nationwide) every even year (2000–2022).</li>
+    </ul>
+    <p class="note">Source: <a href="https://www.cdc.gov/autism/data-research/autism-data-visualization-tool.html" target="_blank">CDC Autism Data Visualization Tool</a></p>
+</section>
+
+<section class="card factCard">
+    <h2>How the Autism Diagnosis Has Evolved</h2>
+    <p>
+        Autism has long been difficult to define because it is based on behavioral observation, not biological markers. Over the past 70+ years, the DSM (Diagnostic and Statistical Manual of Mental Disorders) has revised its definition of autism multiple times. Each change influenced who qualified for a diagnosis and, in turn, reported prevalence rates.
+    </p>
+    <ul>
+        <li><b>DSM-I (1952):</b> Autism linked to schizophrenia, considered rare (1 in 2,500–10,000).</li>
+        <li><b>DSM-II (1968):</b> Still seen as childhood schizophrenia and put them blame on mothers. Many children institutionalized leading to decrease in awareness of the disability by the public.</li>
+        <li><b>DSM-III (1980):</b> Autism recognized as distinct from schizophrenia, with defined diagnostic criteria. Later revisions broadened eligibility.</li>
+        <li><b>DSM-IV (1994):</b> Introduced autism spectrum disorders, including Asperger’s and PDD-NOS, leading to higher prevalence estimates (1 in 150 by early 2000s).</li>
+        <li><b>DSM-V (2013):</b> Consolidated prior categories into a single autism spectrum disorder. Contrary to fears, prevalence continued rising, with CDC estimating 1 in 36 children diagnosed in 2023.</li>
+    </ul>
+    <p>
+        These evolving definitions, combined with policy, awareness, and insurance coverage changes, have driven both broader recognition and better access to services.
+    </p>
+    <p class="note">Source: <a href="https://azaunited.org/blog/how-the-autism-diagnosis-has-evolved-over-time" target="_blank">AZA United — How the Autism Diagnosis Has Evolved Over Time</a></p>
+</section>
+    </div>
+</body>
+</html>
